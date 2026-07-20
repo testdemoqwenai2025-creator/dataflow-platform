@@ -394,4 +394,4 @@ class APIInfoResponse(BaseModel):
     name: str
     version: str
     description: str
-    endpoints: List[dict[str, str]]
+    endpoints: List[dict[str, Any]]
