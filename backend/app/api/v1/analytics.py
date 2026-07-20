@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 import duckdb
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.core.database import get_duckdb
+from app.core.database import get_duckdb_connection
 from app.core.security import get_current_user
 from app.models.schemas import (
     AggregationRequest,
@@ -77,7 +77,7 @@ _dashboards: Dict[str, DashboardConfig] = {
 )
 async def aggregate(
     request: AggregationRequest,
-    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb),
+    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb_connection),
     current_user: dict = Depends(get_current_user),
 ) -> APIResponse[AnalyticsResult]:
     """
@@ -183,7 +183,7 @@ async def aggregate(
 )
 async def pivot(
     request: PivotRequest,
-    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb),
+    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb_connection),
     current_user: dict = Depends(get_current_user),
 ) -> APIResponse[AnalyticsResult]:
     """
@@ -356,7 +356,7 @@ async def update_dashboard(
 )
 async def get_statistics(
     dataset_id: int,
-    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb),
+    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb_connection),
     current_user: dict = Depends(get_current_user),
 ) -> APIResponse[List[StatisticalSummary]]:
     """

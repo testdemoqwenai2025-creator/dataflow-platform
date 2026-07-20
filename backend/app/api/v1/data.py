@@ -32,7 +32,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Query, 
 from fastapi.responses import StreamingResponse
 
 from app.core.config import settings
-from app.core.database import get_duckdb
+from app.core.database import get_duckdb_connection
 from app.core.security import get_current_user
 from app.models.schemas import (
     APIResponse,
@@ -106,7 +106,7 @@ def _get_dataset_info_from_duckdb(conn: duckdb.DuckDBPyConnection, table_name: s
     description="Returns metadata for all datasets currently loaded in DuckDB.",
 )
 async def list_datasets(
-    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb),
+    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb_connection),
     current_user: dict = Depends(get_current_user),
 ) -> APIResponse[List[DatasetInfo]]:
     """
@@ -162,7 +162,7 @@ async def upload_dataset(
     file: UploadFile = File(..., description="CSV or Parquet file"),
     name: Optional[str] = Query(None, description="Dataset name (defaults to filename)"),
     description: Optional[str] = Query(None, description="Dataset description"),
-    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb),
+    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb_connection),
     current_user: dict = Depends(get_current_user),
 ) -> APIResponse[DatasetInfo]:
     """
@@ -265,7 +265,7 @@ async def upload_dataset(
 )
 async def get_dataset(
     dataset_id: int,
-    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb),
+    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb_connection),
     current_user: dict = Depends(get_current_user),
 ) -> APIResponse[DatasetInfo]:
     """
@@ -316,7 +316,7 @@ async def get_dataset(
 )
 async def delete_dataset(
     dataset_id: int,
-    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb),
+    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb_connection),
     current_user: dict = Depends(get_current_user),
 ) -> APIResponse[None]:
     """
@@ -370,7 +370,7 @@ async def delete_dataset(
 )
 async def execute_query(
     request: QueryRequest,
-    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb),
+    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb_connection),
     current_user: dict = Depends(get_current_user),
 ) -> APIResponse[QueryResponse]:
     """
@@ -453,7 +453,7 @@ async def export_dataset(
     dataset_id: int,
     format: str = Query("csv", description="Export format: csv, parquet, json"),
     columns: Optional[str] = Query(None, description="Comma-separated list of columns"),
-    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb),
+    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb_connection),
     current_user: dict = Depends(get_current_user),
 ) -> StreamingResponse:
     """

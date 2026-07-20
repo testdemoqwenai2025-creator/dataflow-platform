@@ -21,17 +21,16 @@ from typing import Any, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt as _bcrypt
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 # ── Password hashing ──────────────────────────────────────────────────────
-# We use bcrypt which is the gold standard for password hashing.
-# The deprecated="auto" setting transparently handles verification of
-# hashes produced by older algorithms during migration.
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# We use bcrypt directly (v5.x) instead of passlib, as passlib's bcrypt
+# backend has compatibility issues with bcrypt 5.x.
+# bcrypt is the gold standard for password hashing.
 
 # ── Bearer token extractor ────────────────────────────────────────────────
 # HTTPBearer automatically extracts the token from the Authorization header
@@ -49,7 +48,10 @@ def hash_password(password: str) -> str:
     Returns:
         The bcrypt hash string (includes salt and cost factor).
     """
-    return pwd_context.hash(password)
+    # bcrypt 5.x requires bytes and has a 72-byte limit
+    password_bytes = password.encode('utf-8')[:72]
+    salt = _bcrypt.gensalt()
+    return _bcrypt.hashpw(password_bytes, salt).decode('utf-8')
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -63,7 +65,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     Returns:
         True if the password matches, False otherwise.
     """
-    return pwd_context.verify(plain_password, hashed_password)
+    password_bytes = plain_password.encode('utf-8')[:72]
+    hashed_bytes = hashed_password.encode('utf-8')
+    return _bcrypt.checkpw(password_bytes, hashed_bytes)
 
 
 def create_access_token(
