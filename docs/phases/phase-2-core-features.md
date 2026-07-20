@@ -16,9 +16,11 @@
 | `POST` | `/api/v1/data/upload` | Upload CSV/Parquet file to DuckDB |
 | `GET` | `/api/v1/data/datasets/{id}` | Get dataset schema and stats |
 | `DELETE` | `/api/v1/data/datasets/{id}` | Delete a dataset |
-| `POST` | `/api/v1/data/query` | Execute SQL query on DuckDB |
-| `GET` | `/api/v1/data/export/{id}` | Export dataset as CSV |
-| `GET` | `/api/v1/analytics/dashboard` | Get dashboard statistics |
+| `POST` | `/api/v1/data/query` | Execute SQL query on DuckDB (returns query_id) |
+| `GET` | `/api/v1/data/query/recent` | Get recent query history |
+| `GET` | `/api/v1/data/query/{query_id}` | Get query status and results by ID |
+| `GET` | `/api/v1/data/export/{id}` | Export dataset as CSV/Parquet/JSON |
+| `GET` | `/api/v1/analytics/dashboard` | Get dashboard configuration |
 | `PUT` | `/api/v1/analytics/dashboard` | Update dashboard configuration |
 
 ---

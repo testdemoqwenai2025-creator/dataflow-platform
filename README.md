@@ -35,11 +35,13 @@ DataFlow follows a **three-tier architecture** where the frontend communicates e
 
 | Component | Status | Details |
 |-----------|--------|---------|
-| **Frontend (Next.js)** | ✅ Build Pass | 7 routes compiled, 429 packages |
-| **Backend (FastAPI)** | ✅ Verified | 24 API routes, all imports pass |
-| **Auth Flow** | ✅ Tested | Register → Login → JWT tokens verified |
-| **SQL Query Engine** | ✅ Tested | DuckDB in-memory queries execute correctly |
-| **Health Check** | ✅ Tested | Returns healthy with DuckDB status |
+| **Frontend (Next.js)** | ✅ Build Pass | 7 routes, enhanced analytics/settings/dashboard pages |
+| **Backend (FastAPI)** | ✅ Verified | 26 API routes including query history & dashboard stats |
+| **Auth Flow** | ✅ Tested | Register → Login → JWT tokens → Protected endpoints |
+| **SQL Query Engine** | ✅ Tested | DuckDB queries with seeded data (60K+ rows) |
+| **Health Check** | ✅ Tested | DuckDB healthy, PostgreSQL graceful degradation |
+| **Backend Tests** | ✅ 22/22 Pass | pytest with async fixtures, full endpoint coverage |
+| **Seed Data** | ✅ Loaded | 3 tables: sales_data (10K), user_activity (50K), products (10) |
 
 ---
 
@@ -165,8 +167,11 @@ dataflow-platform/
 | `POST` | `/api/v1/auth/refresh` | Refresh access token |
 | `GET` | `/api/v1/auth/me` | Get current user |
 | `POST` | `/api/v1/data/upload` | Upload CSV/Parquet to DuckDB |
-| `POST` | `/api/v1/data/query` | Execute SQL on DuckDB |
-| `GET` | `/api/v1/analytics/dashboard` | Dashboard stats |
+| `POST` | `/api/v1/data/query` | Execute SQL on DuckDB (returns query_id) |
+| `GET` | `/api/v1/data/query/recent` | Recent query history |
+| `GET` | `/api/v1/data/query/{id}` | Get query status + results |
+| `GET` | `/api/v1/analytics/dashboard` | Dashboard configuration |
+| `PUT` | `/api/v1/analytics/dashboard` | Update dashboard configuration |
 | `DELETE` | `/api/v1/data/datasets/{id}` | Delete dataset |
 
 ### Phase 3 — Integration
@@ -177,7 +182,8 @@ dataflow-platform/
 | `POST` | `/api/v1/analytics/aggregate` | Aggregate data |
 | `POST` | `/api/v1/analytics/pivot` | Generate pivot table |
 | `GET` | `/api/v1/analytics/stats/{id}` | Statistical summary |
-| `GET` | `/api/v1/data/export/{id}` | Export dataset |
+| `GET` | `/api/v1/analytics/dashboard/stats` | Real-time system stats from DuckDB |
+| `GET` | `/api/v1/data/export/{id}` | Export dataset (CSV/Parquet/JSON) |
 
 ### Phase 4 — Production
 

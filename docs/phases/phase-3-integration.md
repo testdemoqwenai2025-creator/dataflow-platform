@@ -13,6 +13,7 @@
 | `POST` | `/api/v1/analytics/aggregate` | Compute aggregations with group-by |
 | `POST` | `/api/v1/analytics/pivot` | Generate pivot tables |
 | `GET` | `/api/v1/analytics/stats/{id}` | Statistical summary (mean, median, std, percentiles) |
+| `GET` | `/api/v1/analytics/dashboard/stats` | Real-time system stats from DuckDB (datasets, rows, memory, sales summary) |
 | `PUT` | `/api/v1/analytics/dashboard` | Update dashboard layout and widgets |
 
 ---

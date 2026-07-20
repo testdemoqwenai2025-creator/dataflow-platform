@@ -43,6 +43,7 @@ from app.models.schemas import (
     QueryResponse,
 )
 from app.services.query_service import QueryService
+from app.services.query_history import query_history
 
 logger = logging.getLogger(__name__)
 
@@ -390,9 +391,13 @@ async def execute_query(
             detail=f"Query validation failed: {validation_msg}",
         )
 
+    # Record query in history
+    user_name = current_user.get("username", "anonymous") if isinstance(current_user, dict) else "anonymous"
+    record = query_history.add_query(sql=request.sql, created_by=user_name)
+
     # Execute query
+    start_time = time.time()
     try:
-        start_time = time.time()
         df = query_service.execute_query(request.sql)
         execution_time_ms = (time.time() - start_time) * 1000
 
@@ -419,6 +424,16 @@ async def execute_query(
                     clean_row[key] = value
             clean_rows.append(clean_row)
 
+        # Mark query as completed in history
+        query_history.mark_completed(
+            query_id=record.query_id,
+            execution_time_ms=execution_time_ms,
+            row_count=len(df),
+            columns=columns,
+            rows=clean_rows,
+            truncated=truncated,
+        )
+
         query_response = QueryResponse(
             columns=columns,
             rows=clean_rows,
@@ -427,18 +442,92 @@ async def execute_query(
             truncated=truncated,
         )
 
+        # Include query_id in the response metadata via a wrapper
         return APIResponse(
             success=True,
-            data=query_response,
+            data={
+                "query_id": record.query_id,
+                **query_response.model_dump(),
+            },
             message=f"Query executed successfully ({len(clean_rows)} rows in {execution_time_ms:.1f}ms)",
         )
 
     except Exception as exc:
+        elapsed = (time.time() - start_time) * 1000
+        query_history.mark_failed(
+            query_id=record.query_id,
+            execution_time_ms=elapsed,
+            error_message=str(exc),
+        )
         logger.error("Query execution error: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Query execution failed: {str(exc)}",
         )
+
+
+# ── Query History ─────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/query/recent",
+    response_model=APIResponse[List[dict]],
+    summary="Get recent queries",
+    description="Return a list of recently executed queries from the in-memory history.",
+)
+async def get_recent_queries(
+    limit: int = Query(default=20, ge=1, le=100, description="Number of recent queries to return"),
+    current_user: dict = Depends(get_current_user),
+) -> APIResponse[List[dict]]:
+    """
+    Return the most recently executed queries.
+
+    Each entry includes query_id, sql, status, execution_time_ms,
+    created_by, created_at, row_count, and error_message.
+    Full result rows are not included — use /query/{query_id} for details.
+    """
+    recent = query_history.get_recent(limit=limit)
+    return APIResponse(
+        success=True,
+        data=recent,
+        message=f"Returned {len(recent)} recent queries",
+    )
+
+
+@router.get(
+    "/query/{query_id}",
+    response_model=APIResponse[dict],
+    summary="Get query status and results",
+    description="Retrieve the full status and results of a specific query by its ID.",
+)
+async def get_query_status(
+    query_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> APIResponse[dict]:
+    """
+    Get the status and results of a specific query.
+
+    Returns the full query record including:
+        - Status (running/completed/failed)
+        - Result columns and rows (if completed)
+        - Error message (if failed)
+        - Execution timing
+
+    This endpoint is useful for polling long-running queries or
+    retrieving results asynchronously.
+    """
+    record = query_history.get_by_id(query_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Query '{query_id}' not found in history",
+        )
+
+    return APIResponse(
+        success=True,
+        data=record,
+        message=f"Query status: {record['status']}",
+    )
 
 
 # ── Export ────────────────────────────────────────────────────────────────
@@ -461,6 +550,10 @@ async def export_dataset(
 
     Supports CSV, Parquet, and JSON output formats. Optionally,
     specific columns can be selected.
+
+    The dataset is queried from DuckDB and converted to the requested
+    format in-memory, then streamed to the client. For very large
+    datasets, consider using the SQL query endpoint with pagination.
     """
     if format not in ("csv", "parquet", "json"):
         raise HTTPException(
@@ -499,32 +592,64 @@ async def export_dataset(
         select_clause = ", ".join(f'"{c}"' for c in col_list)
 
     sql = f'SELECT {select_clause} FROM "{target_table}"'
-    df = query_service.execute_query(sql)
+
+    try:
+        df = query_service.execute_query(sql)
+    except Exception as exc:
+        logger.error("Export query failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query dataset for export: {str(exc)}",
+        )
+
+    if df.empty:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Dataset '{target_table}' has no data to export",
+        )
 
     # Convert to requested format
     buffer = io.BytesIO()
     media_type = "text/csv"
     file_extension = "csv"
 
-    if format == "csv":
-        df.to_csv(buffer, index=False)
-        media_type = "text/csv"
-        file_extension = "csv"
-    elif format == "parquet":
-        df.to_parquet(buffer, index=False)
-        media_type = "application/octet-stream"
-        file_extension = "parquet"
-    elif format == "json":
-        df.to_json(buffer, orient="records", force_ascii=False)
-        media_type = "application/json"
-        file_extension = "json"
+    try:
+        if format == "csv":
+            df.to_csv(buffer, index=False)
+            media_type = "text/csv"
+            file_extension = "csv"
+        elif format == "parquet":
+            df.to_parquet(buffer, index=False)
+            media_type = "application/octet-stream"
+            file_extension = "parquet"
+        elif format == "json":
+            df.to_json(buffer, orient="records", force_ascii=False)
+            media_type = "application/json"
+            file_extension = "json"
+    except Exception as exc:
+        logger.error("Export format conversion failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to convert dataset to {format}: {str(exc)}",
+        )
 
     buffer.seek(0)
 
+    def _iter_buffer(buf: io.BytesIO):
+        """Yield chunks from the buffer for streaming."""
+        buf.seek(0)
+        while True:
+            chunk = buf.read(8192)
+            if not chunk:
+                break
+            yield chunk
+
     return StreamingResponse(
-        buffer,
+        _iter_buffer(buffer),
         media_type=media_type,
         headers={
-            "Content-Disposition": f"attachment; filename={target_table}.{file_extension}"
+            "Content-Disposition": f"attachment; filename={target_table}.{file_extension}",
+            "X-Row-Count": str(len(df)),
+            "X-Column-Count": str(len(df.columns)),
         },
     )

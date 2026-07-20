@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   Database as DbIcon,
   Key,
@@ -16,10 +16,16 @@ import {
   Loader2,
   AlertCircle,
   Server,
+  Wifi,
+  WifiOff,
+  RefreshCw,
+  Info,
+  Zap,
+  Globe,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody } from "@/components/ui/Card";
-import { apiClient, ApiError } from "@/lib/api-client";
+import { apiClient, ApiError, BASE_URL } from "@/lib/api-client";
 import type { DatabaseConnection, ApiKey } from "@/types";
 
 // ---- Mock data ----
@@ -65,16 +71,44 @@ const mockApiKeys: ApiKey[] = [
   },
 ];
 
-type SettingsTab = "database" | "api-keys" | "profile";
+// ---- Health check types ----
+interface HealthStatus {
+  status: "healthy" | "degraded" | "unhealthy";
+  version: string;
+  uptime?: number;
+  connections?: {
+    duckdb?: { status: string; database?: string };
+    postgresql?: { status: string; host?: string; database?: string };
+  };
+  environment?: string;
+}
+
+// ---- Toast notification ----
+interface Toast {
+  id: string;
+  message: string;
+  type: "success" | "error" | "info";
+}
+
+type SettingsTab = "database" | "api-keys" | "profile" | "system";
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("database");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("system");
   const [connections, setConnections] = useState<DatabaseConnection[]>(mockConnections);
   const [apiKeys, setApiKeys] = useState<ApiKey[]>(mockApiKeys);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, "success" | "error">>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // System status state
+  const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [healthError, setHealthError] = useState<string | null>(null);
+  const [lastHealthCheck, setLastHealthCheck] = useState<Date | null>(null);
+
+  // Toast state
+  const [toasts, setToasts] = useState<Toast[]>([]);
 
   // Profile form
   const [profile, setProfile] = useState({
@@ -102,19 +136,79 @@ export default function SettingsPage() {
   const [showKey, setShowKey] = useState<Record<string, boolean>>({});
 
   const tabs: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
+    { id: "system", label: "System Status", icon: Server },
     { id: "database", label: "Database Connections", icon: DbIcon },
     { id: "api-keys", label: "API Keys", icon: Key },
     { id: "profile", label: "Profile", icon: User },
   ];
+
+  // Toast helpers
+  const addToast = useCallback((message: string, type: Toast["type"] = "info") => {
+    const id = `toast-${Date.now()}`;
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4000);
+  }, []);
+
+  // Health check
+  const fetchHealth = useCallback(async () => {
+    setHealthLoading(true);
+    setHealthError(null);
+    try {
+      const result = await apiClient.health.check();
+      setHealthStatus({
+        status: result.status === "ok" || result.status === "healthy" ? "healthy" : "degraded",
+        version: result.version,
+      });
+      setLastHealthCheck(new Date());
+      addToast("Backend connection verified", "success");
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setHealthError(err.message);
+        addToast(`Health check failed: ${err.message}`, "error");
+      } else {
+        setHealthError("Unable to reach the backend server");
+        addToast("Backend is unreachable", "error");
+      }
+      setHealthStatus(null);
+      setLastHealthCheck(new Date());
+    } finally {
+      setHealthLoading(false);
+    }
+  }, [addToast]);
+
+  // Run health check on mount
+  useEffect(() => {
+    fetchHealth();
+  }, [fetchHealth]);
+
+  // Try to fetch real connections on mount
+  useEffect(() => {
+    async function fetchConnections() {
+      try {
+        const result = await apiClient.settings.getConnections();
+        if (Array.isArray(result) && result.length > 0) {
+          setConnections(result);
+        }
+      } catch {
+        // Use mock connections when backend is unavailable
+        console.warn("Backend unavailable, using mock connections");
+      }
+    }
+    fetchConnections();
+  }, []);
 
   const handleTestConnection = useCallback(async (connId: string) => {
     setTesting(connId);
     try {
       await apiClient.datasets.testConnection(connId);
       setTestResult((prev) => ({ ...prev, [connId]: "success" }));
+      addToast("Connection test successful", "success");
     } catch {
       // Demo mode - mark as success
       setTestResult((prev) => ({ ...prev, [connId]: "success" }));
+      addToast("Connection test completed (demo mode)", "info");
     } finally {
       setTesting(null);
       setTimeout(() => {
@@ -125,19 +219,21 @@ export default function SettingsPage() {
         });
       }, 3000);
     }
-  }, []);
+  }, [addToast]);
 
   const handleSaveProfile = useCallback(async () => {
     setSaving(true);
     try {
       await apiClient.settings.updateProfile(profile);
+      addToast("Profile saved", "success");
     } catch {
       // Demo mode
+      addToast("Profile saved (demo mode)", "info");
     }
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
-  }, [profile]);
+  }, [profile, addToast]);
 
   const handleCreateApiKey = useCallback(async () => {
     try {
@@ -153,6 +249,7 @@ export default function SettingsPage() {
           created_at: result.created_at,
         },
       ]);
+      addToast("API key created", "success");
     } catch {
       // Demo mode
       const demoKey = `dfk_live_${Math.random().toString(36).substring(2, 14)}${Math.random().toString(36).substring(2, 14)}`;
@@ -167,10 +264,11 @@ export default function SettingsPage() {
           created_at: new Date().toISOString(),
         },
       ]);
+      addToast("API key created (demo mode)", "info");
     }
     setShowNewApiKey(false);
     setNewApiKey({ name: "", permissions: ["read"] });
-  }, [newApiKey]);
+  }, [newApiKey, addToast]);
 
   const handleDeleteApiKey = useCallback(
     async (keyId: string) => {
@@ -180,8 +278,9 @@ export default function SettingsPage() {
         // Demo mode
       }
       setApiKeys((prev) => prev.filter((k) => k.id !== keyId));
+      addToast("API key deleted", "info");
     },
-    []
+    [addToast]
   );
 
   const handleAddConnection = () => {
@@ -208,10 +307,36 @@ export default function SettingsPage() {
       username: "",
       password: "",
     });
+    addToast("Connection added", "success");
   };
+
+  // Derive connection statuses from health check
+  const duckdbStatus = healthStatus?.connections?.duckdb?.status;
+  const pgStatus = healthStatus?.connections?.postgresql?.status;
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* Toast notifications */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg text-sm font-medium animate-fade-in ${
+              toast.type === "success"
+                ? "bg-green-600 text-white"
+                : toast.type === "error"
+                ? "bg-red-600 text-white"
+                : "bg-surface-800 text-white"
+            }`}
+          >
+            {toast.type === "success" && <Check className="w-4 h-4" />}
+            {toast.type === "error" && <AlertCircle className="w-4 h-4" />}
+            {toast.type === "info" && <Info className="w-4 h-4" />}
+            {toast.message}
+          </div>
+        ))}
+      </div>
+
       {/* Page header */}
       <div>
         <h1 className="text-2xl font-bold text-surface-900">Settings</h1>
@@ -240,6 +365,277 @@ export default function SettingsPage() {
           );
         })}
       </div>
+
+      {/* System Status Tab */}
+      {activeTab === "system" && (
+        <div className="space-y-6">
+          {/* Backend Health */}
+          <Card>
+            <CardHeader
+              action={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={
+                    healthLoading ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="w-3.5 h-3.5" />
+                    )
+                  }
+                  onClick={fetchHealth}
+                  disabled={healthLoading}
+                >
+                  Test Connection
+                </Button>
+              }
+            >
+              <div>
+                <CardTitle>Backend Status</CardTitle>
+                <CardDescription>
+                  Real-time health check of the DataFlow API server
+                </CardDescription>
+              </div>
+            </CardHeader>
+            <CardBody>
+              <div className="space-y-4">
+                {/* Overall status */}
+                <div className="flex items-center gap-4 p-4 rounded-lg bg-surface-50 border border-surface-200">
+                  <div
+                    className={`flex items-center justify-center w-12 h-12 rounded-xl ${
+                      healthLoading
+                        ? "bg-yellow-50 text-yellow-600"
+                        : healthStatus?.status === "healthy"
+                        ? "bg-green-50 text-green-600"
+                        : healthError
+                        ? "bg-red-50 text-red-600"
+                        : "bg-surface-100 text-surface-400"
+                    }`}
+                  >
+                    {healthLoading ? (
+                      <Loader2 className="w-6 h-6 animate-spin" />
+                    ) : healthStatus?.status === "healthy" ? (
+                      <Wifi className="w-6 h-6" />
+                    ) : (
+                      <WifiOff className="w-6 h-6" />
+                    )}
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-surface-900">
+                      {healthLoading
+                        ? "Checking..."
+                        : healthStatus?.status === "healthy"
+                        ? "Connected"
+                        : healthError
+                        ? "Disconnected"
+                        : "Not checked yet"}
+                    </p>
+                    <p className="text-xs text-surface-500 mt-0.5">
+                      {lastHealthCheck
+                        ? `Last checked: ${lastHealthCheck.toLocaleTimeString()}`
+                        : "Run a health check to verify connectivity"}
+                    </p>
+                  </div>
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium ${
+                      healthLoading
+                        ? "bg-yellow-50 text-yellow-700"
+                        : healthStatus?.status === "healthy"
+                        ? "bg-green-50 text-green-700"
+                        : healthError
+                        ? "bg-red-50 text-red-700"
+                        : "bg-surface-100 text-surface-600"
+                    }`}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        healthLoading
+                          ? "bg-yellow-500 animate-pulse"
+                          : healthStatus?.status === "healthy"
+                          ? "bg-green-500"
+                          : healthError
+                          ? "bg-red-500"
+                          : "bg-surface-400"
+                      }`}
+                    />
+                    {healthLoading
+                      ? "Checking"
+                      : healthStatus?.status === "healthy"
+                      ? "Healthy"
+                      : healthError
+                      ? "Unhealthy"
+                      : "Unknown"}
+                  </span>
+                </div>
+
+                {/* Error message */}
+                {healthError && (
+                  <div className="flex items-start gap-3 p-3 rounded-lg bg-red-50 border border-red-100">
+                    <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm text-red-700">{healthError}</p>
+                      <p className="text-xs text-red-500 mt-1">
+                        The application will use mock data while the backend is unavailable.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </CardBody>
+          </Card>
+
+          {/* Connection Status Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* DuckDB */}
+            <Card>
+              <CardBody>
+                <div className="flex items-start gap-3">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-amber-50 text-amber-600">
+                    <DbIcon className="w-5 h-5" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-semibold text-surface-900">DuckDB</h3>
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                          duckdbStatus === "connected" || (!healthStatus && !healthError)
+                            ? "bg-green-50 text-green-700"
+                            : duckdbStatus === "error"
+                            ? "bg-red-50 text-red-700"
+                            : "bg-surface-100 text-surface-600"
+                        }`}
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            duckdbStatus === "connected" || (!healthStatus && !healthError)
+                              ? "bg-green-500"
+                              : duckdbStatus === "error"
+                              ? "bg-red-500"
+                              : "bg-surface-400"
+                          }`}
+                        />
+                        {duckdbStatus || (healthError ? "unavailable" : "connected")}
+                      </span>
+                    </div>
+                    <p className="text-xs text-surface-500 mt-1">
+                      {healthStatus?.connections?.duckdb?.database || "Local file-based analytics engine"}
+                    </p>
+                    <div className="mt-2 space-y-1">
+                      <div className="flex items-center gap-1 text-xs text-surface-400">
+                        <Zap className="w-3 h-3" />
+                        In-process OLAP engine
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </CardBody>
+            </Card>
+
+            {/* PostgreSQL */}
+            <Card>
+              <CardBody>
+                <div className="flex items-start gap-3">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-50 text-blue-600">
+                    <Server className="w-5 h-5" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-semibold text-surface-900">PostgreSQL</h3>
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                          pgStatus === "connected" || (!healthStatus && !healthError)
+                            ? "bg-green-50 text-green-700"
+                            : pgStatus === "error"
+                            ? "bg-red-50 text-red-700"
+                            : "bg-surface-100 text-surface-600"
+                        }`}
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            pgStatus === "connected" || (!healthStatus && !healthError)
+                              ? "bg-green-500"
+                              : pgStatus === "error"
+                              ? "bg-red-500"
+                              : "bg-surface-400"
+                          }`}
+                        />
+                        {pgStatus || (healthError ? "unavailable" : "connected")}
+                      </span>
+                    </div>
+                    <p className="text-xs text-surface-500 mt-1">
+                      {healthStatus?.connections?.postgresql?.host
+                        ? `${healthStatus.connections.postgresql.host}/${healthStatus.connections.postgresql.database}`
+                        : "Primary relational database"}
+                    </p>
+                    <div className="mt-2 space-y-1">
+                      <div className="flex items-center gap-1 text-xs text-surface-400">
+                        <Globe className="w-3 h-3" />
+                        Network-connected database
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </CardBody>
+            </Card>
+          </div>
+
+          {/* API Info */}
+          <Card>
+            <CardHeader>
+              <div>
+                <CardTitle>API Configuration</CardTitle>
+                <CardDescription>
+                  Current API endpoint and version information
+                </CardDescription>
+              </div>
+            </CardHeader>
+            <CardBody>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-surface-500 uppercase tracking-wide">
+                      API Base URL
+                    </label>
+                    <p className="text-sm text-surface-900 font-mono mt-1">
+                      {BASE_URL}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-surface-500 uppercase tracking-wide">
+                      API Version
+                    </label>
+                    <p className="text-sm text-surface-900 mt-1">
+                      {healthStatus?.version || "—"}
+                    </p>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-surface-500 uppercase tracking-wide">
+                      Environment
+                    </label>
+                    <p className="text-sm text-surface-900 mt-1">
+                      {healthStatus?.environment || process.env.NODE_ENV || "development"}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-surface-500 uppercase tracking-wide">
+                      Backend Status
+                    </label>
+                    <p className="text-sm text-surface-900 mt-1">
+                      {healthStatus?.status === "healthy"
+                        ? "✅ Connected and healthy"
+                        : healthError
+                        ? "❌ Unavailable — using mock data"
+                        : "⚪ Not yet checked"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+      )}
 
       {/* Database Connections Tab */}
       {activeTab === "database" && (

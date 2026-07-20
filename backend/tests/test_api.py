@@ -16,15 +16,16 @@ Architecture Decision:
 """
 
 import pytest
+import pytest_asyncio
 import json
 from httpx import AsyncClient, ASGITransport
 
-from app.main import app
+from main import app
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def client():
     """
     Provide an async HTTP client for testing.
@@ -37,7 +38,7 @@ async def client():
         yield ac
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def auth_token(client: AsyncClient) -> str:
     """
     Register a test user and return a valid access token.
@@ -74,8 +75,8 @@ async def auth_token(client: AsyncClient) -> str:
     return token
 
 
-@pytest.fixture
-def auth_headers(auth_token: str) -> dict:
+@pytest_asyncio.fixture
+async def auth_headers(auth_token: str) -> dict:
     """Return Authorization headers with a valid Bearer token."""
     return {"Authorization": f"Bearer {auth_token}"}
 
@@ -93,13 +94,11 @@ class TestHealthEndpoints:
         assert response.status_code == 200
 
         data = response.json()
-        # The APIResponse wrapper is used
-        assert data["success"] is True
-        health = data["data"]
-        assert health["status"] == "healthy"
-        assert "version" in health
-        assert "environment" in health
-        assert "duckdb_status" in health
+        # Health endpoint returns HealthResponse directly (not wrapped in APIResponse)
+        assert data["status"] == "healthy"
+        assert "version" in data
+        assert "environment" in data
+        assert "duckdb_status" in data
 
     @pytest.mark.asyncio
     async def test_api_info(self, client: AsyncClient):
@@ -108,11 +107,10 @@ class TestHealthEndpoints:
         assert response.status_code == 200
 
         data = response.json()
-        assert data["success"] is True
-        info = data["data"]
-        assert info["name"] == "DataFlow Platform"
-        assert "endpoints" in info
-        assert len(info["endpoints"]) >= 3  # auth, data, analytics
+        # Info endpoint returns APIInfoResponse directly (not wrapped in APIResponse)
+        assert data["name"] == "DataFlow Platform"
+        assert "endpoints" in data
+        assert len(data["endpoints"]) >= 3  # auth, data, analytics
 
     @pytest.mark.asyncio
     async def test_version(self, client: AsyncClient):

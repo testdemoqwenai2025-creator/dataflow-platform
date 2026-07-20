@@ -275,6 +275,155 @@ async def pivot(
 
 
 @router.get(
+    "/dashboard/stats",
+    response_model=APIResponse[dict],
+    summary="Get dashboard statistics",
+    description="Retrieve real-time analytics statistics from DuckDB for the dashboard.",
+)
+async def get_dashboard_stats(
+    conn: duckdb.DuckDBPyConnection = Depends(get_duckdb_connection),
+    current_user: dict = Depends(get_current_user),
+) -> APIResponse[dict]:
+    """
+    Get real-time dashboard statistics by querying DuckDB.
+
+    Returns:
+        - dataset_count: Number of user tables in DuckDB
+        - total_rows: Sum of rows across all tables
+        - duckdb_version: DuckDB version string
+        - duckdb_status: Connection status
+        - memory_usage: Current DuckDB memory limit setting
+        - sales_summary: Aggregated stats from sales_data if it exists
+          (total_revenue, unique_customers, top_category, avg_order_value)
+    """
+    stats: Dict[str, Any] = {}
+
+    try:
+        # Dataset count from information_schema
+        dataset_count = conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'main'"
+        ).fetchone()[0]
+        stats["dataset_count"] = dataset_count
+    except Exception as exc:
+        logger.warning("Failed to query dataset count: %s", exc)
+        stats["dataset_count"] = 0
+
+    try:
+        # Total rows across all user tables
+        tables_result = conn.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+        ).fetchall()
+        total_rows = 0
+        for (table_name,) in tables_result:
+            try:
+                count = conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0]
+                total_rows += count
+            except Exception:
+                pass
+        stats["total_rows"] = total_rows
+    except Exception as exc:
+        logger.warning("Failed to compute total rows: %s", exc)
+        stats["total_rows"] = 0
+
+    try:
+        # DuckDB system info
+        version_result = conn.execute("SELECT version()").fetchone()
+        stats["duckdb_version"] = version_result[0] if version_result else "unknown"
+    except Exception:
+        stats["duckdb_version"] = "unknown"
+
+    stats["duckdb_status"] = "connected"
+
+    try:
+        # Memory usage info
+        memory_setting = conn.execute("SELECT current_setting('memory_limit')").fetchone()
+        stats["memory_limit"] = memory_setting[0] if memory_setting else "unknown"
+    except Exception:
+        stats["memory_limit"] = "unknown"
+
+    try:
+        threads_setting = conn.execute("SELECT current_setting('threads')").fetchone()
+        stats["threads"] = threads_setting[0] if threads_setting else "unknown"
+    except Exception:
+        stats["threads"] = "unknown"
+
+    # Sales data aggregations — only if a sales_data-like table exists
+    stats["sales_summary"] = None
+    try:
+        sales_table = None
+        for (table_name,) in tables_result:
+            if "sales" in table_name.lower():
+                sales_table = table_name
+                break
+
+        if sales_table is not None:
+            # Determine column names available in the sales table
+            col_result = conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+                [sales_table],
+            ).fetchall()
+            available_cols = {row[0].lower() for row in col_result}
+
+            sales_summary: Dict[str, Any] = {}
+
+            # Total revenue
+            if "revenue" in available_cols or "amount" in available_cols or "total" in available_cols:
+                rev_col = "revenue" if "revenue" in available_cols else ("amount" if "amount" in available_cols else "total")
+                try:
+                    total_rev = conn.execute(
+                        f'SELECT SUM("{rev_col}") FROM "{sales_table}"'
+                    ).fetchone()[0]
+                    sales_summary["total_revenue"] = float(total_rev) if total_rev is not None else 0.0
+                except Exception:
+                    sales_summary["total_revenue"] = None
+
+            # Unique customers
+            if "customer" in available_cols or "customer_id" in available_cols:
+                cust_col = "customer_id" if "customer_id" in available_cols else "customer"
+                try:
+                    unique_cust = conn.execute(
+                        f'SELECT COUNT(DISTINCT "{cust_col}") FROM "{sales_table}"'
+                    ).fetchone()[0]
+                    sales_summary["unique_customers"] = int(unique_cust)
+                except Exception:
+                    sales_summary["unique_customers"] = None
+
+            # Top category
+            if "category" in available_cols:
+                try:
+                    top_cat = conn.execute(
+                        f'SELECT "category", COUNT(*) as cnt FROM "{sales_table}" GROUP BY "category" ORDER BY cnt DESC LIMIT 1',
+                    ).fetchone()
+                    if top_cat:
+                        sales_summary["top_category"] = {"name": top_cat[0], "count": int(top_cat[1])}
+                except Exception:
+                    pass
+
+            # Average order value
+            if "revenue" in available_cols or "amount" in available_cols or "total" in available_cols:
+                rev_col = "revenue" if "revenue" in available_cols else ("amount" if "amount" in available_cols else "total")
+                try:
+                    avg_val = conn.execute(
+                        f'SELECT AVG("{rev_col}") FROM "{sales_table}"'
+                    ).fetchone()[0]
+                    sales_summary["avg_order_value"] = float(avg_val) if avg_val is not None else 0.0
+                except Exception:
+                    sales_summary["avg_order_value"] = None
+
+            if sales_summary:
+                sales_summary["source_table"] = sales_table
+                stats["sales_summary"] = sales_summary
+    except Exception as exc:
+        logger.warning("Failed to compute sales summary: %s", exc)
+
+    return APIResponse(
+        success=True,
+        data=stats,
+        message="Dashboard statistics retrieved",
+    )
+
+
+@router.get(
     "/dashboard",
     response_model=APIResponse[DashboardConfig],
     summary="Get dashboard configuration",
