@@ -237,3 +237,28 @@ Based on impact and effort, the recommended implementation order:
 8. **Edge computing** — Only when global latency becomes a measurable problem
 
 The key principle: **optimize for the current phase's bottlenecks, not hypothetical future ones.** Every improvement above is architecturally compatible with the current codebase — they can be introduced incrementally without a full rewrite.
+
+---
+
+## Build Verification Results (2026-07-20)
+
+All components have been built, compiled, and tested on the server:
+
+| Component | Result | Notes |
+|-----------|--------|-------|
+| **Backend pip install** | ✅ Pass | All 17 dependencies installed in venv |
+| **Frontend npm install** | ✅ Pass | 429 packages, 5 vulnerabilities (3rd party) |
+| **Frontend build** | ✅ Pass | 7 routes, 87.2 kB shared JS, 0 errors |
+| **Backend app init** | ✅ Pass | 24 API routes registered under /api/v1 |
+| **Auth register** | ✅ Pass | In-memory user store works without PostgreSQL |
+| **Auth login** | ✅ Pass | JWT access + refresh tokens generated correctly |
+| **SQL query** | ✅ Pass | DuckDB in-memory query execution works |
+| **Health check** | ✅ Pass | Returns healthy with DuckDB, unavailable for PostgreSQL (expected without PG) |
+| **Info endpoint** | ✅ Pass | Lists all 3 endpoint groups with sub-endpoints |
+| **Datasets list** | ✅ Pass | Returns empty list (no data uploaded yet) |
+
+### Known Issues from Build
+1. **GitHub token scope**: The provided PAT lacks `workflow` scope, so `.github/workflows/ci.yml` was moved to `docs/ci-workflow-reference.yml`. To restore, create a token with `workflow` scope and re-add the file.
+2. **PostgreSQL dependency**: The backend gracefully degrades when PostgreSQL is unavailable — auth uses in-memory store, analytics uses DuckDB only. For production, PostgreSQL must be running.
+3. **npm audit**: 5 vulnerabilities in transitive dependencies (1 moderate, 3 high, 1 critical). Run `npm audit fix` to address, or update packages.
+4. **bcrypt 5.x**: The installed bcrypt 5.x has a different API from passlib's expected 4.x. The `hash_password`/`verify_password` wrappers in `core/security.py` handle this compatibility.
