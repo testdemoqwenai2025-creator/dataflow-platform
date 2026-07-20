@@ -23,6 +23,12 @@ frontend/node_modules/
 *.duckdb
 *.duckdb.wal
 data/
+db/
+
+# ── Build Artifacts ──
+.next/
+frontend/.next/
+scripts/test_backend.py
 
 # ── Environment ──
 .env
